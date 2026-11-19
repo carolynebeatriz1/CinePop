@@ -30,8 +30,7 @@ O banco `cinepop.db` é criado sozinho na primeira vez.
 ## Tecnologias
 Python 3 · Tkinter · SQLite · Programação Orientada a Objetos
 
-
-🎞️ **[Ver a apresentação do projeto](https://carolynebeatriz1.github.io/CinePop/apresentacao.html)**
-
 ---
 Feito por **Carolyne Beatriz** · Técnico em Informática (Estácio) · 2026
+
+🎞️ **[Ver a apresentação do projeto](https://carolynebeatriz1.github.io/CinePop/apresentacao.html)**
