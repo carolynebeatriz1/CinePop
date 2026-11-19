@@ -5,12 +5,14 @@
 #   1. Cartaz     -> filmes e horários
 #   2. Poltronas  -> mapa de poltronas e ingressos vendidos
 #   3. Pagamento  -> pagamento simulado e código do ingresso
+# E mais a classe Usuarios, que cuida do login (cadastro e entrada no app).
 # Todos guardam os dados no banco SQLite cinepop.db.
 #
 # A interface tem uma tela para cada etapa da compra:
-#   Filme -> Sessão (horário e poltronas) -> Pagamento -> Ingresso
+#   Login -> Filme -> Sessão (horário e poltronas) -> Pagamento -> Ingresso
 # Cada tela é uma classe que HERDA da classe Tela.
 
+import hashlib
 import math
 import random
 import sqlite3
@@ -210,6 +212,36 @@ class Pagamento:
         return True
 
 
+# ---------- Login: cadastro e entrada dos usuários ----------
+class Usuarios:
+    def __init__(self, banco):
+        self.banco = banco
+        # PRIMARY KEY: não podem existir dois usuários com o mesmo nome de usuário
+        self.banco.execute("CREATE TABLE IF NOT EXISTS usuarios "
+                           "(usuario TEXT PRIMARY KEY, nome TEXT, senha TEXT)")
+        self.banco.commit()
+
+    def criptografar(self, senha):
+        # a senha nunca é guardada como foi digitada, só o hash dela (SHA-256)
+        return hashlib.sha256(senha.encode()).hexdigest()
+
+    def cadastrar(self, nome, usuario, senha):
+        try:
+            with self.banco:
+                self.banco.execute("INSERT INTO usuarios VALUES (?, ?, ?)",
+                                   (usuario, nome, self.criptografar(senha)))
+            return True
+        except sqlite3.IntegrityError:
+            return False   # esse usuário já existe
+
+    def entrar(self, usuario, senha):
+        linha = self.banco.execute("SELECT nome FROM usuarios WHERE usuario = ? AND senha = ?",
+                                   (usuario, self.criptografar(senha))).fetchone()
+        if linha is None:
+            return None    # usuário ou senha errados
+        return linha[0]    # devolve o nome da pessoa
+
+
 # =====================================================================
 #                        TELAS (interface gráfica)
 # =====================================================================
@@ -317,6 +349,8 @@ class Tela(tk.Canvas):
                                 font=titulo_fonte(40))
         self.create_text(self.bbox(logo)[2] + 2, 44, text="POP", anchor="w", fill=MOSTARDA,
                          font=titulo_fonte(40))
+        if self.etapa < 0:
+            return   # a tela de login não mostra as etapas da compra
 
         etapas = ["Filme", "Sessão", "Pagamento", "Ingresso"]
         x = 420
@@ -359,13 +393,113 @@ class Tela(tk.Canvas):
         pass   # cada tela filha desenha o seu conteúdo
 
 
+# ---------- Tela 0: login (entrar ou criar conta) ----------
+class TelaEntrada(Tela):
+    etapa = -1
+    rotulos = {"nome": "SEU NOME", "usuario": "USUÁRIO", "senha": "SENHA"}
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.modo = "entrar"      # ou "cadastrar"
+        self.erro = ""
+        self.campos = {}
+        for nome in self.rotulos:
+            campo = tk.Entry(self, font=fonte(16), bg=CARTAO, fg=CREME, relief="flat",
+                             insertbackground=CREME, highlightthickness=0, bd=0,
+                             show="•" if nome == "senha" else "")
+            campo.bind("<Return>", lambda evento: self.confirmar())
+            self.campos[nome] = campo
+
+    def desenhar(self):
+        self.inicio_da_tela()
+        centro = LARGURA / 2
+        cadastrar = self.modo == "cadastrar"
+        nomes_campos = ["nome", "usuario", "senha"] if cadastrar else ["usuario", "senha"]
+
+        x1, x2, y1 = 300, 740, 116
+        altura = 250 + len(nomes_campos) * 84 + (26 if self.erro else 0)
+        y2 = y1 + altura
+        self.retangulo(x1 + 6, y1 + 8, x2 + 6, y2 + 8, 14, fill=SOMBRA, outline=SOMBRA)
+        self.retangulo(x1, y1, x2, y2, 14, fill=CARTAO, outline=CARTAO)
+
+        self.create_text(centro, y1 + 46, text="CRIAR CONTA" if cadastrar else "ENTRAR",
+                         fill=CREME, font=titulo_fonte(42))
+        self.create_text(centro, y1 + 84, fill=TEXTO_SUAVE, font=fonte(14),
+                         text="Cadastre-se para comprar seus ingressos" if cadastrar
+                         else "Faça login para comprar seus ingressos")
+
+        y = y1 + 116
+        for nome in nomes_campos:
+            self.create_text(x1 + 34, y, text=self.rotulos[nome], anchor="w", fill=MOSTARDA,
+                             font=titulo_fonte(18))
+            self.retangulo(x1 + 34, y + 14, x2 - 34, y + 60, 10, fill=FUNDO_CAIXA,
+                           outline=FUNDO_CAIXA)
+            self.campos[nome].config(bg=FUNDO_CAIXA)
+            self.create_window(x1 + 50, y + 37, window=self.campos[nome], anchor="w",
+                               width=x2 - x1 - 100, height=30)
+            y += 84
+
+        if self.erro:
+            self.create_text(centro, y + 2, text="⚠  " + self.erro, fill=MOSTARDA,
+                             font=fonte(13, "bold"))
+            y += 26
+
+        self.botao(x1 + 34, y + 14, x2 - 34, y + 60, "CRIAR CONTA" if cadastrar else "ENTRAR",
+                   self.confirmar)
+
+        # link para trocar entre "entrar" e "criar conta"
+        tag = self.nova_tag()
+        link = self.create_text(centro, y + 92, tags=tag, fill=CREME, font=fonte(14, "bold"),
+                                text="Já tem conta? Entrar" if cadastrar
+                                else "Não tem conta? Criar conta")
+        self.clicavel(tag, self.trocar_modo,
+                      lambda: self.itemconfig(link, fill=MOSTARDA),
+                      lambda: self.itemconfig(link, fill=CREME))
+
+        self.fita_de_filme(ALTURA - 40, 40)
+        self.campos[nomes_campos[0]].focus_set()
+
+    def trocar_modo(self):
+        self.modo = "entrar" if self.modo == "cadastrar" else "cadastrar"
+        self.erro = ""
+        self.desenhar()
+
+    def confirmar(self):
+        nome = self.campos["nome"].get().strip()
+        usuario = self.campos["usuario"].get().strip().lower()
+        senha = self.campos["senha"].get()
+
+        if self.modo == "cadastrar":
+            if nome == "" or usuario == "" or senha == "":
+                self.erro = "Preencha todos os campos"
+            elif len(senha) < 4:
+                self.erro = "A senha precisa ter pelo menos 4 caracteres"
+            elif not self.app.usuarios.cadastrar(nome, usuario, senha):
+                self.erro = "Esse usuário já existe, escolha outro"
+            else:
+                self.app.entrar_no_app(nome)
+                return
+        else:
+            if usuario == "" or senha == "":
+                self.erro = "Digite o usuário e a senha"
+            else:
+                nome_encontrado = self.app.usuarios.entrar(usuario, senha)
+                if nome_encontrado is None:
+                    self.erro = "Usuário ou senha incorretos"
+                else:
+                    self.app.entrar_no_app(nome_encontrado)
+                    return
+        self.desenhar()
+
+
 # ---------- Tela 1: escolher o filme ----------
 class TelaFilmes(Tela):
     etapa = 0
 
     def desenhar(self):
         self.inicio_da_tela()
-        self.titulo("EM CARTAZ", f"Hoje, {HOJE}  ·  Escolha um filme para ver as sessões")
+        self.titulo("EM CARTAZ", f"Olá, {self.app.usuario}!  ·  Hoje, {HOJE}  ·  "
+                                 "Escolha um filme para ver as sessões")
 
         largura_cartao, espaco = 225, 20
         y1, y2 = 192, 634
@@ -731,7 +865,7 @@ class TelaIngresso(Tela):
                          font=titulo_fonte(32))
 
         self.botao(300, 572, 560, 618, "COMPRAR OUTRO INGRESSO", self.app.nova_compra)
-        self.botao(576, 572, 740, 618, "SAIR", self.app.janela.destroy, "secundario")
+        self.botao(576, 572, 740, 618, "SAIR", self.app.sair_da_conta, "secundario")
         self.fita_de_filme(ALTURA - 40, 40)
 
 
@@ -744,6 +878,8 @@ class AppCinePop:
         self.cartaz = Cartaz(self.banco)
         self.poltronas = Poltronas(self.banco)
         self.pagamento = Pagamento(self.banco)
+        self.usuarios = Usuarios(self.banco)
+        self.usuario = None     # nome de quem fez login
 
         self.janela = tk.Tk()
         self.janela.title("CinePop")
@@ -755,7 +891,7 @@ class AppCinePop:
         self.escolher_fonte()
 
         self.tela = None
-        self.nova_compra()
+        self.mostrar(TelaEntrada)   # o app começa pelo login
 
     def escolher_fonte(self):
         # usa a primeira fonte da lista que estiver instalada no computador
@@ -787,10 +923,18 @@ class AppCinePop:
         self.filme = None
         self.horario = None
         self.poltronas_escolhidas = []
-        self.cliente = ""
+        self.cliente = self.usuario   # o nome já vem preenchido com o do login
         self.forma = "Pix"
         self.codigo = ""
         self.mostrar(TelaFilmes)
+
+    def entrar_no_app(self, nome):
+        self.usuario = nome
+        self.nova_compra()
+
+    def sair_da_conta(self):
+        self.usuario = None
+        self.mostrar(TelaEntrada)
 
     def escolher_filme(self, filme):
         self.filme = filme
